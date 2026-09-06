@@ -28,6 +28,8 @@ const config = {
   openAiKey: process.env.OPENAI_API_KEY,
   openAiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
   panelChannelId: process.env.PANEL_CHANNEL_ID || null,
+  ticketPanelChannelId: process.env.TICKET_PANEL_CHANNEL_ID || null,
+  applicationPanelChannelId: process.env.APPLICATION_PANEL_CHANNEL_ID || null,
   ticketCategoryId: process.env.TICKET_CATEGORY_ID || null,
   applicationCategoryId: process.env.APPLICATION_CATEGORY_ID || null,
   staffRoleId: process.env.STAFF_ROLE_ID || null,
@@ -66,6 +68,16 @@ const commands = [
   {
     name: 'panel',
     description: 'Sender ticket- og ansøgningspanelerne',
+    default_member_permissions: PermissionFlagsBits.Administrator.toString()
+  },
+  {
+    name: 'ticketpanel',
+    description: 'Sender kun ticket-panelet til ticket-kanalen',
+    default_member_permissions: PermissionFlagsBits.Administrator.toString()
+  },
+  {
+    name: 'ansogningpanel',
+    description: 'Sender kun ansøgningspanelet til ansøgningskanalen',
     default_member_permissions: PermissionFlagsBits.Administrator.toString()
   },
   {
@@ -153,6 +165,11 @@ async function sendPanels(channel) {
   const panels = buildPanels();
   await channel.send(panels.ticket);
   await channel.send(panels.application);
+}
+
+async function sendSinglePanel(channel, panelType) {
+  const panels = buildPanels();
+  await channel.send(panels[panelType]);
 }
 
 function supportRoleMentions(guild) {
@@ -377,6 +394,21 @@ client.on(Events.InteractionCreate, async interaction => {
         }
         await sendPanels(panelChannel);
         await interaction.reply({ content: `Panelerne er sendt til ${panelChannel}.`, ephemeral: true });
+      }
+      if (interaction.commandName === 'ticketpanel' || interaction.commandName === 'ansogningpanel') {
+        const isTicketPanel = interaction.commandName === 'ticketpanel';
+        const channelId = isTicketPanel ? config.ticketPanelChannelId : config.applicationPanelChannelId;
+        const panelType = isTicketPanel ? 'ticket' : 'application';
+        const label = isTicketPanel ? 'ticket-panelet' : 'ansøgningspanelet';
+        const panelChannel = channelId
+          ? await interaction.guild.channels.fetch(channelId).catch(() => null)
+          : null;
+        if (!panelChannel?.isTextBased()) {
+          await interaction.reply({ content: `Kanalen til ${label} findes ikke. Sæt ${isTicketPanel ? 'TICKET_PANEL_CHANNEL_ID' : 'APPLICATION_PANEL_CHANNEL_ID'} i .env.`, ephemeral: true });
+          return;
+        }
+        await sendSinglePanel(panelChannel, panelType);
+        await interaction.reply({ content: `${label} er sendt til ${panelChannel}.`, ephemeral: true });
       }
       if (interaction.commandName === 'close') {
         if (!interaction.channel.topic?.startsWith('ticket:') && !interaction.channel.topic?.startsWith('ansogning:')) {
