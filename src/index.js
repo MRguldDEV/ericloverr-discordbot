@@ -11,6 +11,7 @@ const {
   GatewayIntentBits,
   ModalBuilder,
   PermissionFlagsBits,
+  MessageFlags,
   REST,
   Routes,
   TextInputBuilder,
@@ -27,6 +28,10 @@ const config = {
   guildId: process.env.GUILD_ID,
   openAiKey: process.env.OPENAI_API_KEY,
   openAiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+  groqKey: process.env.GROQ_API_KEY,
+  groqModel: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
+  groqGuardModel: process.env.GROQ_GUARD_MODEL || 'meta-llama/llama-prompt-guard-2-22m',
+  aiChannelId: process.env.AI_CHANNEL_ID || null,
   panelChannelId: process.env.PANEL_CHANNEL_ID || null,
   ticketPanelChannelId: process.env.TICKET_PANEL_CHANNEL_ID || null,
   applicationPanelChannelId: process.env.APPLICATION_PANEL_CHANNEL_ID || null,
@@ -63,27 +68,63 @@ const client = new Client({
 });
 
 const openai = config.openAiKey ? new OpenAI({ apiKey: config.openAiKey }) : null;
+const groq = config.groqKey ? new OpenAI({
+  apiKey: config.groqKey,
+  baseURL: 'https://api.groq.com/openai/v1'
+}) : null;
+const aiClient = groq || openai;
+const aiProvider = groq ? 'Groq' : 'OpenAI';
+const aiModel = groq ? config.groqModel : config.openAiModel;
 const spamTracker = new Map();
+const creatorResponse = 'MRguld har kodet og udviklet denne bot. GitHub: https://github.com/MRguldDEV';
+const mtcoreResponse = 'MTCore er et udviklingsprojekt med fokus på servere, scripts og design.\n\nMRguld er CEO, scripter og designer.';
+
+function asksAboutCreator(question) {
+  const normalizedQuestion = question.toLowerCase().replace(/[?!.,]/g, ' ');
+  return /hvem.*mr\s*guld|mr\s*guld.*hvem|hvem\s+(har\s+)?(kodet|lavet|udviklet|bygget|skabt)\s+(dig|botten|denne bot)|hvem\s+(udviklede|lavede|kodede|byggede|skabte)\s+(dig|botten|denne bot)|hvem\s+står\s+bag\s+(dig|botten|denne bot)/i.test(normalizedQuestion);
+}
+
+function asksAboutMtcore(question) {
+  return /hvad\s+er\s+mt\s*core|hvem\s+er\s+mt\s*core|mt\s*core\s+(er|om|projekt)/i.test(question);
+}
 
 async function createAiCompletion(question, systemMessage) {
   const request = {
-    model: config.openAiModel,
+    model: aiModel,
     messages: [
       { role: 'system', content: systemMessage },
       { role: 'user', content: question }
     ]
   };
-  if (config.openAiModel.startsWith('gpt-5')) request.max_completion_tokens = 500;
+  if (aiProvider === 'OpenAI' && config.openAiModel.startsWith('gpt-5')) request.max_completion_tokens = 500;
   else request.max_tokens = 500;
-  return openai.chat.completions.create(request);
+  return aiClient.chat.completions.create(request);
+}
+
+async function promptIsSafe(question) {
+  if (!groq) return true;
+  const result = await groq.chat.completions.create({
+    model: config.groqGuardModel,
+    messages: [{ role: 'user', content: question }],
+    temperature: 1,
+    max_completion_tokens: 1,
+    top_p: 1,
+    stream: false,
+    stop: null
+  });
+  const verdict = result.choices[0]?.message?.content?.toLowerCase() || '';
+  return !/(unsafe|injection|jailbreak|malicious|attack)/i.test(verdict);
 }
 
 function aiErrorMessage(error) {
   const status = error?.status;
-  if (status === 401) return 'OpenAI API-nøglen er ugyldig eller udløbet. Lav en ny nøgle og opdater OPENAI_API_KEY i .env.';
-  if (status === 404) return `OpenAI-modellen "${config.openAiModel}" blev ikke fundet eller er ikke tilgængelig for din konto.`;
-  if (status === 429) return 'OpenAI afviser forespørgslen på grund af rate limit eller manglende kredit.';
-  return 'AI-support kunne ikke svare lige nu. Tjek bot-loggen for den præcise OpenAI-fejl.';
+  if (status === 401) return `${aiProvider}-nøglen er ugyldig eller udløbet. Tjek ${aiProvider === 'Groq' ? 'GROQ_API_KEY' : 'OPENAI_API_KEY'} i .env.`;
+  if (status === 404) return `${aiProvider}-modellen "${aiModel}" blev ikke fundet eller er ikke tilgængelig.`;
+  if (status === 429 && error?.code === 'credit_balance_exhausted') {
+    return 'OpenAI-kontoen har ingen kreditter tilbage. Tilføj betaling/kreditter, og prøv igen.';
+  }
+  if (status === 429) return 'OpenAI har midlertidig rate limit. Vent lidt, og prøv igen.';
+  return `${aiProvider}-support kunne ikke svare lige nu. Tjek bot-loggen for den præcise fejl.`;
 }
 
 const commands = [
@@ -325,11 +366,11 @@ function ticketControls() {
 
 async function handleTicketAction(interaction) {
   if (!interaction.channel.topic?.startsWith('ticket:') && !interaction.channel.topic?.startsWith('ansogning:')) {
-    await interaction.reply({ content: 'Denne kanal er ikke en ticket eller ansøgning.', ephemeral: true });
+    await interaction.reply({ content: 'Denne kanal er ikke en ticket eller ansøgning.', flags: MessageFlags.Ephemeral });
     return;
   }
   if (!isModerator(interaction)) {
-    await interaction.reply({ content: 'Kun staff kan bruge denne knap.', ephemeral: true });
+    await interaction.reply({ content: 'Kun staff kan bruge denne knap.', flags: MessageFlags.Ephemeral });
     return;
   }
   if (interaction.customId === 'ticket_claim') {
@@ -348,7 +389,7 @@ async function handleSuggestion(interaction) {
     ? await interaction.guild.channels.fetch(config.suggestionChannelId).catch(() => null)
     : interaction.channel;
   if (!channel?.isTextBased()) {
-    await interaction.reply({ content: 'Forslagskanalen findes ikke. Sæt SUGGESTION_CHANNEL_ID i .env.', ephemeral: true });
+    await interaction.reply({ content: 'Forslagskanalen findes ikke. Sæt SUGGESTION_CHANNEL_ID i .env.', flags: MessageFlags.Ephemeral });
     return;
   }
   const embed = new EmbedBuilder()
@@ -361,17 +402,17 @@ async function handleSuggestion(interaction) {
   const sent = await channel.send({ embeds: [embed] });
   await sent.react('👍');
   await sent.react('👎');
-  await interaction.reply({ content: `Dit forslag er sendt til ${channel}.`, ephemeral: true });
+  await interaction.reply({ content: `Dit forslag er sendt til ${channel}.`, flags: MessageFlags.Ephemeral });
 }
 
 async function handleClear(interaction) {
   const amount = interaction.options.getInteger('antal', true);
   if (!interaction.channel.isTextBased() || !interaction.channel.bulkDelete) {
-    await interaction.reply({ content: 'Denne kanal understøtter ikke sletning af beskeder.', ephemeral: true });
+    await interaction.reply({ content: 'Denne kanal understøtter ikke sletning af beskeder.', flags: MessageFlags.Ephemeral });
     return;
   }
   const deleted = await interaction.channel.bulkDelete(amount, true);
-  await interaction.reply({ content: `🧹 Slettede ${deleted.size} beskeder.`, ephemeral: true });
+  await interaction.reply({ content: `🧹 Slettede ${deleted.size} beskeder.`, flags: MessageFlags.Ephemeral });
   await logAction(interaction.guild, `🧹 ${interaction.user.tag} slettede ${deleted.size} beskeder i ${interaction.channel}.`);
 }
 
@@ -380,7 +421,7 @@ async function handleTimeout(interaction) {
   const minutes = interaction.options.getInteger('minutter', true);
   const reason = interaction.options.getString('grund') || 'Ingen grund angivet';
   if (!member?.moderatable) {
-    await interaction.reply({ content: 'Jeg kan ikke give dette medlem timeout. Tjek min rolleplacering.', ephemeral: true });
+    await interaction.reply({ content: 'Jeg kan ikke give dette medlem timeout. Tjek min rolleplacering.', flags: MessageFlags.Ephemeral });
     return;
   }
   await member.timeout(minutes * 60 * 1000, reason);
@@ -390,12 +431,24 @@ async function handleTimeout(interaction) {
 
 async function handleAiCommand(interaction) {
   const question = interaction.options.getString('sporgsmal', true);
-  if (!openai) {
-    await interaction.reply({ content: 'AI-support er ikke sat op. Tilføj OPENAI_API_KEY i .env.', ephemeral: true });
+  if (asksAboutMtcore(question)) {
+    await interaction.reply(mtcoreResponse);
+    return;
+  }
+  if (asksAboutCreator(question)) {
+    await interaction.reply(creatorResponse);
+    return;
+  }
+  if (!aiClient) {
+    await interaction.reply({ content: 'AI-support er ikke sat op. Tilføj GROQ_API_KEY eller OPENAI_API_KEY i .env.', flags: MessageFlags.Ephemeral });
     return;
   }
   await interaction.deferReply();
-  const completion = await createAiCompletion(question, 'Du er en venlig dansk Discord-supporter. Svar kort, naturligt og konkret på dansk. Opfind ikke serverregler eller staff-beslutninger.');
+  if (!(await promptIsSafe(question))) {
+    await interaction.editReply('Det spørgsmål kan jeg ikke hjælpe med. Prøv at formulere det på en almindelig og sikker måde.');
+    return;
+  }
+  const completion = await createAiCompletion(question, 'Du er en venlig dansk Discord-supporter. Svar kort, naturligt og konkret på dansk. Hvis brugeren spørger, hvem der har kodet eller udviklet denne bot, skal du svare: MRguld har kodet og udviklet denne bot. GitHub: https://github.com/MRguldDEV. Opfind ikke serverregler eller staff-beslutninger.');
   const answer = completion.choices[0]?.message?.content?.trim() || 'Jeg kunne ikke finde et svar lige nu.';
   await interaction.editReply(answer.slice(0, 1900));
 }
@@ -404,7 +457,7 @@ async function handleBan(interaction) {
   const member = interaction.options.getMember('medlem');
   const reason = interaction.options.getString('grund') || 'Ingen grund angivet';
   if (!member?.bannable) {
-    await interaction.reply({ content: 'Jeg kan ikke banne dette medlem. Tjek min rolleplacering.', ephemeral: true });
+    await interaction.reply({ content: 'Jeg kan ikke banne dette medlem. Tjek min rolleplacering.', flags: MessageFlags.Ephemeral });
     return;
   }
   await member.ban({ reason });
@@ -416,7 +469,7 @@ async function handleKick(interaction) {
   const member = interaction.options.getMember('medlem');
   const reason = interaction.options.getString('grund') || 'Ingen grund angivet';
   if (!member?.kickable) {
-    await interaction.reply({ content: 'Jeg kan ikke kicke dette medlem. Tjek min rolleplacering.', ephemeral: true });
+    await interaction.reply({ content: 'Jeg kan ikke kicke dette medlem. Tjek min rolleplacering.', flags: MessageFlags.Ephemeral });
     return;
   }
   await member.kick(reason);
@@ -494,7 +547,7 @@ function applicationModal(type) {
 }
 
 async function handleTicket(interaction, type) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const channel = await createPrivateChannel(interaction, type, 'ticket');
   const item = ticketTypes[type];
   const embed = new EmbedBuilder()
@@ -512,7 +565,7 @@ async function handleApplication(interaction, type) {
 }
 
 async function handleApplicationSubmit(interaction, type) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const channel = await createPrivateChannel(interaction, type, 'ansogning');
   const item = applicationTypes[type];
   const embed = new EmbedBuilder()
@@ -531,17 +584,29 @@ async function handleApplicationSubmit(interaction, type) {
 }
 
 async function answerWithAi(message) {
-  if (!openai) {
-    await message.reply('AI-support er ikke sat op endnu. Tilføj `OPENAI_API_KEY` i `.env`, så er jeg klar.');
-    return;
-  }
   const question = message.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim();
   if (!question) {
     await message.reply('Skriv dit spørgsmål efter mit ping, så prøver jeg at hjælpe.');
     return;
   }
+  if (asksAboutMtcore(question)) {
+    await message.reply(mtcoreResponse);
+    return;
+  }
+  if (asksAboutCreator(question)) {
+    await message.reply(creatorResponse);
+    return;
+  }
+  if (!aiClient) {
+    await message.reply('AI-support er ikke sat op endnu. Tilføj GROQ_API_KEY eller OPENAI_API_KEY i .env, så er jeg klar.');
+    return;
+  }
   await message.channel.sendTyping();
-  const completion = await createAiCompletion(question, 'Du er en venlig dansk Discord-supporter. Svar kort, naturligt og konkret på dansk. Opfind ikke serverregler eller staff-beslutninger. Sig tydeligt, hvis en medarbejder skal tage over.');
+  if (!(await promptIsSafe(question))) {
+    await message.reply('Det spørgsmål kan jeg ikke hjælpe med. Prøv at formulere det på en almindelig og sikker måde.');
+    return;
+  }
+  const completion = await createAiCompletion(question, 'Du er en venlig dansk Discord-supporter. Hvis brugeren spørger, hvem der har kodet eller udviklet denne bot, skal du svare: MRguld har kodet og udviklet denne bot. GitHub: https://github.com/MRguldDEV. Svar ellers kort, naturligt og konkret på dansk. Opfind ikke serverregler eller staff-beslutninger. Sig tydeligt, hvis en medarbejder skal tage over.');
   const answer = completion.choices[0]?.message?.content?.trim() || 'Jeg kunne ikke finde et svar lige nu.';
   await message.reply(answer.slice(0, 1900));
 }
@@ -557,6 +622,7 @@ client.once(Events.ClientReady, async readyClient => {
     : Routes.applicationCommands(config.clientId);
   await rest.put(route, { body: commands });
   console.log(`✅ ${readyClient.user.tag} er online`);
+  console.log(`AI-provider: ${aiProvider} | Model: ${aiModel}`);
   console.log(`Status: ${botSettings.status} | Activity: ${botSettings.activity}`);
 });
 
@@ -568,11 +634,11 @@ client.on(Events.InteractionCreate, async interaction => {
           ? await interaction.guild.channels.fetch(config.panelChannelId).catch(() => null)
           : interaction.channel;
         if (!panelChannel?.isTextBased()) {
-          await interaction.reply({ content: 'Panel-kanalen findes ikke. Sæt PANEL_CHANNEL_ID i .env.', ephemeral: true });
+          await interaction.reply({ content: 'Panel-kanalen findes ikke. Sæt PANEL_CHANNEL_ID i .env.', flags: MessageFlags.Ephemeral });
           return;
         }
         await sendPanels(panelChannel);
-        await interaction.reply({ content: `Panelerne er sendt til ${panelChannel}.`, ephemeral: true });
+        await interaction.reply({ content: `Panelerne er sendt til ${panelChannel}.`, flags: MessageFlags.Ephemeral });
       }
       if (interaction.commandName === 'ticketpanel' || interaction.commandName === 'ansogningpanel') {
         const isTicketPanel = interaction.commandName === 'ticketpanel';
@@ -583,15 +649,15 @@ client.on(Events.InteractionCreate, async interaction => {
           ? await interaction.guild.channels.fetch(channelId).catch(() => null)
           : null;
         if (!panelChannel?.isTextBased()) {
-          await interaction.reply({ content: `Kanalen til ${label} findes ikke. Sæt ${isTicketPanel ? 'TICKET_PANEL_CHANNEL_ID' : 'APPLICATION_PANEL_CHANNEL_ID'} i .env.`, ephemeral: true });
+          await interaction.reply({ content: `Kanalen til ${label} findes ikke. Sæt ${isTicketPanel ? 'TICKET_PANEL_CHANNEL_ID' : 'APPLICATION_PANEL_CHANNEL_ID'} i .env.`, flags: MessageFlags.Ephemeral });
           return;
         }
         await sendSinglePanel(panelChannel, panelType);
-        await interaction.reply({ content: `${label} er sendt til ${panelChannel}.`, ephemeral: true });
+        await interaction.reply({ content: `${label} er sendt til ${panelChannel}.`, flags: MessageFlags.Ephemeral });
       }
       if (interaction.commandName === 'close') {
         if (!interaction.channel.topic?.startsWith('ticket:') && !interaction.channel.topic?.startsWith('ansogning:')) {
-          await interaction.reply({ content: 'Denne kanal er ikke en ticket eller ansøgning.', ephemeral: true });
+          await interaction.reply({ content: 'Denne kanal er ikke en ticket eller ansøgning.', flags: MessageFlags.Ephemeral });
           return;
         }
         await interaction.reply('Kanalen lukkes om 5 sekunder.');
@@ -627,8 +693,9 @@ client.on(Events.InteractionCreate, async interaction => {
       await handleApplicationSubmit(interaction, interaction.customId.replace('application_modal_', ''));
     }
   } catch (error) {
-    console.error(error);
-    const reply = { content: 'Der skete en fejl. Tjek bot-loggen eller prøv igen.', ephemeral: true };
+    if (error?.status) console.warn(`OpenAI-fejl ${error.status}: ${error.code || 'ukendt'}`);
+    else console.error(error);
+    const reply = { content: error?.status ? aiErrorMessage(error) : 'Der skete en fejl. Tjek bot-loggen eller prøv igen.', flags: MessageFlags.Ephemeral };
     if (interaction.deferred || interaction.replied) await interaction.editReply(reply).catch(() => null);
     else await interaction.reply(reply).catch(() => null);
   }
@@ -652,7 +719,8 @@ client.on(Events.MessageCreate, async message => {
     return;
   }
 
-  if (message.mentions.has(client.user)) {
+  const shouldAnswer = message.channel.id === config.aiChannelId || message.mentions.has(client.user);
+  if (shouldAnswer) {
     try {
       await answerWithAi(message);
     } catch (error) {
