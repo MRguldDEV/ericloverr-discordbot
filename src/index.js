@@ -104,6 +104,77 @@ const commands = [
     name: 'suggest',
     description: 'Send et forslag til serveren',
     options: [{ name: 'forslag', description: 'Dit forslag', type: 3, required: true, max_length: 1000 }]
+  },
+  {
+    name: 'ai',
+    description: 'Stil AI-supporten et spørgsmål',
+    options: [{ name: 'sporgsmal', description: 'Dit spørgsmål', type: 3, required: true, max_length: 1500 }]
+  },
+  {
+    name: 'askai',
+    description: 'Stil AI-supporten et spørgsmål',
+    options: [{ name: 'sporgsmal', description: 'Dit spørgsmål', type: 3, required: true, max_length: 1500 }]
+  },
+  {
+    name: 'ban',
+    description: 'Bannér et medlem fra serveren',
+    default_member_permissions: PermissionFlagsBits.BanMembers.toString(),
+    options: [
+      { name: 'medlem', description: 'Medlemmet der skal bannes', type: 6, required: true },
+      { name: 'grund', description: 'Grund til ban', type: 3, required: false }
+    ]
+  },
+  {
+    name: 'kick',
+    description: 'Kick et medlem fra serveren',
+    default_member_permissions: PermissionFlagsBits.KickMembers.toString(),
+    options: [
+      { name: 'medlem', description: 'Medlemmet der skal kickes', type: 6, required: true },
+      { name: 'grund', description: 'Grund til kick', type: 3, required: false }
+    ]
+  },
+  {
+    name: 'warn',
+    description: 'Giv et medlem en advarsel',
+    default_member_permissions: PermissionFlagsBits.ManageMessages.toString(),
+    options: [
+      { name: 'medlem', description: 'Medlemmet der skal advares', type: 6, required: true },
+      { name: 'grund', description: 'Grund til advarsel', type: 3, required: true }
+    ]
+  },
+  {
+    name: 'lock',
+    description: 'Lås den aktuelle kanal',
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+  },
+  {
+    name: 'unlock',
+    description: 'Lås den aktuelle kanal op',
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+  },
+  {
+    name: 'slowmode',
+    description: 'Sæt slowmode i den aktuelle kanal',
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString(),
+    options: [{ name: 'sekunder', description: '0 til 21600 sekunder', type: 4, required: true, min_value: 0, max_value: 21600 }]
+  },
+  {
+    name: 'userinfo',
+    description: 'Vis oplysninger om et medlem',
+    options: [{ name: 'medlem', description: 'Medlemmet du vil se', type: 6, required: false }]
+  },
+  {
+    name: 'serverinfo',
+    description: 'Vis oplysninger om serveren'
+  },
+  {
+    name: 'avatar',
+    description: 'Vis en brugers avatar',
+    options: [{ name: 'medlem', description: 'Brugeren du vil se', type: 6, required: false }]
+  },
+  {
+    name: 'ping',
+    description: 'Se bottens ping'
   }
 ];
 
@@ -295,6 +366,106 @@ async function handleTimeout(interaction) {
   await logAction(interaction.guild, `⏳ ${interaction.user.tag} gav ${member.user.tag} timeout i ${minutes} minutter: ${reason}`);
 }
 
+async function handleAiCommand(interaction) {
+  const question = interaction.options.getString('sporgsmal', true);
+  if (!openai) {
+    await interaction.reply({ content: 'AI-support er ikke sat op. Tilføj OPENAI_API_KEY i .env.', ephemeral: true });
+    return;
+  }
+  await interaction.deferReply();
+  const completion = await openai.chat.completions.create({
+    model: config.openAiModel,
+    messages: [
+      { role: 'system', content: 'Du er en venlig dansk Discord-supporter. Svar kort, naturligt og konkret på dansk. Opfind ikke serverregler eller staff-beslutninger.' },
+      { role: 'user', content: question }
+    ],
+    max_tokens: 500
+  });
+  const answer = completion.choices[0]?.message?.content?.trim() || 'Jeg kunne ikke finde et svar lige nu.';
+  await interaction.editReply(answer.slice(0, 1900));
+}
+
+async function handleBan(interaction) {
+  const member = interaction.options.getMember('medlem');
+  const reason = interaction.options.getString('grund') || 'Ingen grund angivet';
+  if (!member?.bannable) {
+    await interaction.reply({ content: 'Jeg kan ikke banne dette medlem. Tjek min rolleplacering.', ephemeral: true });
+    return;
+  }
+  await member.ban({ reason });
+  await interaction.reply(`🔨 ${member.user.tag} er bannet. Grund: ${reason}`);
+  await logAction(interaction.guild, `🔨 ${interaction.user.tag} bannede ${member.user.tag}: ${reason}`);
+}
+
+async function handleKick(interaction) {
+  const member = interaction.options.getMember('medlem');
+  const reason = interaction.options.getString('grund') || 'Ingen grund angivet';
+  if (!member?.kickable) {
+    await interaction.reply({ content: 'Jeg kan ikke kicke dette medlem. Tjek min rolleplacering.', ephemeral: true });
+    return;
+  }
+  await member.kick(reason);
+  await interaction.reply(`👢 ${member.user.tag} er kicked. Grund: ${reason}`);
+  await logAction(interaction.guild, `👢 ${interaction.user.tag} kickede ${member.user.tag}: ${reason}`);
+}
+
+async function handleWarn(interaction) {
+  const member = interaction.options.getMember('medlem');
+  const reason = interaction.options.getString('grund', true);
+  await interaction.reply(`⚠️ ${member} har fået en advarsel. Grund: ${reason}`);
+  await logAction(interaction.guild, `⚠️ ${interaction.user.tag} advarede ${member.user.tag}: ${reason}`);
+}
+
+async function handleChannelLock(interaction, locked) {
+  await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, {
+    SendMessages: locked ? false : null
+  });
+  await interaction.reply(locked ? '🔒 Kanalen er låst.' : '🔓 Kanalen er låst op.');
+  await logAction(interaction.guild, `${locked ? '🔒' : '🔓'} ${interaction.user.tag} ${locked ? 'låste' : 'låste op'} ${interaction.channel}.`);
+}
+
+async function handleSlowmode(interaction) {
+  const seconds = interaction.options.getInteger('sekunder', true);
+  await interaction.channel.setRateLimitPerUser(seconds);
+  await interaction.reply(seconds ? `🐌 Slowmode er sat til ${seconds} sekunder.` : '🐌 Slowmode er slået fra.');
+}
+
+async function handleUserInfo(interaction) {
+  const member = interaction.options.getMember('medlem') || interaction.member;
+  const roles = member.roles.cache.filter(role => role.id !== interaction.guild.id).map(role => role.name).join(', ') || 'Ingen roller';
+  const embed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle(`👤 ${member.user.tag}`)
+    .setThumbnail(member.user.displayAvatarURL())
+    .addFields(
+      { name: 'Bruger-ID', value: member.id, inline: true },
+      { name: 'Joined', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true },
+      { name: 'Roller', value: roles.slice(0, 1024) }
+    );
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function handleServerInfo(interaction) {
+  const guild = interaction.guild;
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(`🌐 ${guild.name}`)
+    .setThumbnail(guild.iconURL())
+    .addFields(
+      { name: 'Ejer', value: `<@${guild.ownerId}>`, inline: true },
+      { name: 'Medlemmer', value: String(guild.memberCount), inline: true },
+      { name: 'Kanaler', value: String(guild.channels.cache.size), inline: true },
+      { name: 'Oprettet', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>` }
+    );
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function handleAvatar(interaction) {
+  const user = interaction.options.getUser('medlem') || interaction.user;
+  const embed = new EmbedBuilder().setColor(0x5865f2).setTitle(`🖼️ Avatar: ${user.tag}`).setImage(user.displayAvatarURL({ size: 1024 }));
+  await interaction.reply({ embeds: [embed] });
+}
+
 function applicationModal(type) {
   const item = applicationTypes[type];
   return new ModalBuilder()
@@ -422,6 +593,17 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'clear') await handleClear(interaction);
       if (interaction.commandName === 'timeout') await handleTimeout(interaction);
       if (interaction.commandName === 'suggest') await handleSuggestion(interaction);
+      if (interaction.commandName === 'ai' || interaction.commandName === 'askai') await handleAiCommand(interaction);
+      if (interaction.commandName === 'ban') await handleBan(interaction);
+      if (interaction.commandName === 'kick') await handleKick(interaction);
+      if (interaction.commandName === 'warn') await handleWarn(interaction);
+      if (interaction.commandName === 'lock') await handleChannelLock(interaction, true);
+      if (interaction.commandName === 'unlock') await handleChannelLock(interaction, false);
+      if (interaction.commandName === 'slowmode') await handleSlowmode(interaction);
+      if (interaction.commandName === 'userinfo') await handleUserInfo(interaction);
+      if (interaction.commandName === 'serverinfo') await handleServerInfo(interaction);
+      if (interaction.commandName === 'avatar') await handleAvatar(interaction);
+      if (interaction.commandName === 'ping') await interaction.reply(`🏓 Pong! ${client.ws.ping}ms`);
     }
     if (interaction.isButton() && ['ticket_claim', 'ticket_close'].includes(interaction.customId)) {
       await handleTicketAction(interaction);
