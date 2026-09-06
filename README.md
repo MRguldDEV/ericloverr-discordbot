@@ -10,6 +10,9 @@ En Discord.js v14 bot med:
 - `/panel` og `/close` slash commands
 - Moderation: `/clear` og `/timeout`
 - `/suggest` med 👍/👎 stemmer
+- AI: `/ai`, `/askai` og ping direkte til botten
+- Moderation: `/ban`, `/kick`, `/warn`, `/lock`, `/unlock`, `/slowmode`
+- Info: `/userinfo`, `/serverinfo`, `/avatar`, `/ping`
 - Velkomstbesked og autorole
 - Anti-spam med automatisk timeout
 
@@ -63,7 +66,13 @@ Kør derefter `/panel` i den kanal, hvor panelerne skal stå. Kommandoen kræver
 
 ## 4. Panel-kanal, kategorier og roller
 
-Udfyld `PANEL_CHANNEL_ID` med kanal-ID'et på den kanal, hvor `/panel` altid skal sende ticket- og ansøgningspanelerne. Kommandoen kan køres fra en anden kanal.
+Udfyld kanal-ID'erne sådan:
+
+- `TICKET_PANEL_CHANNEL_ID`: kanal til ticket-panelet
+- `APPLICATION_PANEL_CHANNEL_ID`: kanal til ansøgningspanelet
+- `PANEL_CHANNEL_ID`: valgfri samlet kanal til `/panel`, som sender begge paneler
+
+Brug `/ticketpanel` eller `/ansogningpanel` til at sende ét panel ad gangen. Kommandoerne kan køres fra en anden kanal.
 
 Udfyld ID'erne i `.env`, hvis tickets skal placeres i bestemte kategorier eller gives til bestemte roller:
 
