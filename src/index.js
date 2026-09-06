@@ -64,6 +64,28 @@ const client = new Client({
 
 const openai = config.openAiKey ? new OpenAI({ apiKey: config.openAiKey }) : null;
 const spamTracker = new Map();
+
+async function createAiCompletion(question, systemMessage) {
+  const request = {
+    model: config.openAiModel,
+    messages: [
+      { role: 'system', content: systemMessage },
+      { role: 'user', content: question }
+    ]
+  };
+  if (config.openAiModel.startsWith('gpt-5')) request.max_completion_tokens = 500;
+  else request.max_tokens = 500;
+  return openai.chat.completions.create(request);
+}
+
+function aiErrorMessage(error) {
+  const status = error?.status;
+  if (status === 401) return 'OpenAI API-nøglen er ugyldig eller udløbet. Lav en ny nøgle og opdater OPENAI_API_KEY i .env.';
+  if (status === 404) return `OpenAI-modellen "${config.openAiModel}" blev ikke fundet eller er ikke tilgængelig for din konto.`;
+  if (status === 429) return 'OpenAI afviser forespørgslen på grund af rate limit eller manglende kredit.';
+  return 'AI-support kunne ikke svare lige nu. Tjek bot-loggen for den præcise OpenAI-fejl.';
+}
+
 const commands = [
   {
     name: 'panel',
@@ -373,14 +395,7 @@ async function handleAiCommand(interaction) {
     return;
   }
   await interaction.deferReply();
-  const completion = await openai.chat.completions.create({
-    model: config.openAiModel,
-    messages: [
-      { role: 'system', content: 'Du er en venlig dansk Discord-supporter. Svar kort, naturligt og konkret på dansk. Opfind ikke serverregler eller staff-beslutninger.' },
-      { role: 'user', content: question }
-    ],
-    max_tokens: 500
-  });
+  const completion = await createAiCompletion(question, 'Du er en venlig dansk Discord-supporter. Svar kort, naturligt og konkret på dansk. Opfind ikke serverregler eller staff-beslutninger.');
   const answer = completion.choices[0]?.message?.content?.trim() || 'Jeg kunne ikke finde et svar lige nu.';
   await interaction.editReply(answer.slice(0, 1900));
 }
@@ -526,14 +541,7 @@ async function answerWithAi(message) {
     return;
   }
   await message.channel.sendTyping();
-  const completion = await openai.chat.completions.create({
-    model: config.openAiModel,
-    messages: [
-      { role: 'system', content: 'Du er en venlig dansk Discord-supporter. Svar kort, naturligt og konkret på dansk. Opfind ikke serverregler eller staff-beslutninger. Sig tydeligt, hvis en medarbejder skal tage over.' },
-      { role: 'user', content: question }
-    ],
-    max_tokens: 500
-  });
+  const completion = await createAiCompletion(question, 'Du er en venlig dansk Discord-supporter. Svar kort, naturligt og konkret på dansk. Opfind ikke serverregler eller staff-beslutninger. Sig tydeligt, hvis en medarbejder skal tage over.');
   const answer = completion.choices[0]?.message?.content?.trim() || 'Jeg kunne ikke finde et svar lige nu.';
   await message.reply(answer.slice(0, 1900));
 }
@@ -649,7 +657,7 @@ client.on(Events.MessageCreate, async message => {
       await answerWithAi(message);
     } catch (error) {
       console.error(error);
-      await message.reply('AI-support er midlertidigt utilgængelig. Prøv igen om lidt eller opret en support-ticket.');
+      await message.reply(aiErrorMessage(error));
     }
   }
 });
